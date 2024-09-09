@@ -44,7 +44,7 @@ Before you begin, ensure you have met the following requirements:
 
 ## Configuration
 
-1. Create a `config.yml` file in the project root directory with the following structure:
+1. Modify the `config.yml` file in the project root directory:
    ```yaml
    username: "your_instagram_username"
    password: "your_instagram_password"
@@ -85,18 +85,10 @@ The script will create a new directory with the current date and time, containin
 - JSON files with positive comments for each selected language
 - Text files with usernames of users who posted positive comments, for each selected language
 
-## Contributing
-
-Contributions to this project are welcome. Please feel free to submit a Pull Request.
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
 ## Disclaimer
 
 This tool is for educational purposes only. Be sure to comply with Instagram's terms of service and respect user privacy when using this tool.
 
-## Contact
+## Known Issues
 
-If you have any questions or feedback, please open an issue on this GitHub repository.
+Currently there is no way to scrape reels if they are removed from the feed tab and just visible in the reels tab on a profile.
