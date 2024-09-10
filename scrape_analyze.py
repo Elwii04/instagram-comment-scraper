@@ -161,14 +161,21 @@ def is_german(text):
         return False
 
 def analyze_sentiment(text, sentiment_analyzer):
-    # Trim the text to the maximum length the model can handle (512 tokens)
-    max_length = 512
+    # Get the maximum sequence length for the model
+    max_length = sentiment_analyzer.tokenizer.model_max_length
+
+    # Tokenize the text
     tokens = sentiment_analyzer.tokenizer.tokenize(text)
-    if len(tokens) > max_length:
-        tokens = tokens[:max_length]
-        text = sentiment_analyzer.tokenizer.convert_tokens_to_string(tokens)
-    
-    result = sentiment_analyzer(text)
+
+    # If the tokens exceed the maximum length, truncate them
+    if len(tokens) > max_length - 2:  # Account for [CLS] and [SEP] tokens
+        tokens = tokens[:(max_length - 2)]
+
+    # Convert tokens back to text
+    truncated_text = sentiment_analyzer.tokenizer.convert_tokens_to_string(tokens)
+
+    # Analyze sentiment
+    result = sentiment_analyzer(truncated_text)
     return int(result[0]['label'].split()[0])
 
 
@@ -261,89 +268,18 @@ def get_language_selection():
         print("\nSelect a language filter:")
         print("1: English")
         print("2: German")
-        print("3: English and German")
-        print("4: Custom selection (multiple languages)")
-        choice = input("Enter your choice (1, 2, 3, or 4): ")
+        print("3: Other (specify language code)")
+        choice = input("Enter your choice (1, 2, or 3): ")
         
         if choice == '1':
-            return ['en']
+            return 'en'
         elif choice == '2':
-            return ['de']
+            return 'de'
         elif choice == '3':
-            return ['en', 'de']
-        elif choice == '4':
-            print("Enter the ISO 639-1 language codes separated by commas.")
-            print("For example: 'en,de,fr,es' for English, German, French, and Spanish.")
-            lang_codes = input("Language codes: ")
-            return [code.strip().lower() for code in lang_codes.split(',')]
+            lang_code = input("Enter the ISO 639-1 language code (e.g., 'fr' for French): ")
+            return lang_code.lower()
         else:
             print("Invalid choice. Please try again.")
-
-def is_target_language(text, target_langs):
-    try:
-        detected_lang = detect(text)
-        return detected_lang in target_langs
-    except LangDetectException:
-        return False
-
-def merge_and_analyze_comments(directory, target_langs):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    sentiment_analyzer = pipeline("sentiment-analysis", model="nlptown/bert-base-multilingual-uncased-sentiment", device=device)
-    print(f"Using device: {device}")
-
-    merged_data = defaultdict(lambda: {"comments": set()})
-    very_negative = []
-    negative = []
-    neutral = []
-    positive = defaultdict(list)
-    positive_target_langs = {lang: [] for lang in target_langs}
-
-    multi_influencer_users, total_unique_users = count_multi_influencer_users(directory)
-
-    # First, merge all comments from all files
-    for filename in os.listdir(directory):
-        if filename.endswith("_comments.json"):
-            with open(os.path.join(directory, filename), 'r', encoding='utf-8') as file:
-                data = json.load(file)
-                if isinstance(data, list):
-                    for entry in data:
-                        if isinstance(entry, dict) and "user" in entry and "comments" in entry:
-                            user = entry["user"]
-                            comments = entry["comments"]
-                            if isinstance(comments, list):
-                                merged_data[user]["comments"].update(comments)
-                            elif isinstance(comments, str):
-                                merged_data[user]["comments"].add(comments)
-                elif isinstance(data, dict):
-                    for user, comments in data.items():
-                        if isinstance(comments, list):
-                            merged_data[user]["comments"].update(comments)
-                        elif isinstance(comments, str):
-                            merged_data[user]["comments"].add(comments)
-
-    total_comments = sum(len(info["comments"]) for info in merged_data.values())
-    print(f"Analyzing comments from {total_unique_users} unique users...")
-    print(f"Users who commented on multiple influencers' posts: {multi_influencer_users}")
-
-    with tqdm(total=total_comments, desc="Analyzing comments", unit="comment") as pbar:
-        for user, info in merged_data.items():
-            for comment in info["comments"]:
-                sentiment = analyze_sentiment(comment, sentiment_analyzer)
-                comment_data = {"user": user, "comment": comment}
-                if sentiment == 1:
-                    very_negative.append(comment_data)
-                elif sentiment == 2:
-                    negative.append(comment_data)
-                elif sentiment == 3:
-                    neutral.append(comment_data)
-                else:  # 4 or 5
-                    positive['all'].append(comment_data)
-                    detected_lang = detect(comment)
-                    if detected_lang in target_langs:
-                        positive_target_langs[detected_lang].append(comment_data)
-                pbar.update(1)
-
-    return merged_data, very_negative, negative, neutral, positive, positive_target_langs, total_unique_users, total_comments, multi_influencer_users
 
 def main():
     config = read_config("config.yml")
@@ -351,14 +287,8 @@ def main():
     password = config['password']
     influencers = config['influencers']
 
-    target_langs = get_language_selection()
-    lang_names = {
-        'en': 'English',
-        'de': 'German',
-        'fr': 'French',
-        'es': 'Spanish',
-        'it': 'Italian'
-    }
+    target_lang = get_language_selection()
+    lang_name = {'en': 'English', 'de': 'German'}.get(target_lang, target_lang.upper())
 
     chrome_options = Options()
     chrome_options.add_argument("--lang=en-US")
@@ -403,7 +333,7 @@ def main():
             print(f"Comments saved to {output_file}")
 
         # Analyze comments
-        merged_data, very_negative, negative, neutral, positive, positive_target_langs, total_unique_users, total_comments, multi_influencer_users = merge_and_analyze_comments(today_folder, target_langs)
+        merged_data, very_negative, negative, neutral, positive, positive_target_lang, total_unique_users, total_comments, multi_influencer_users = merge_and_analyze_comments(today_folder, target_lang)
 
         # Write the merged data to a new JSON file
         output_filename = "merged_comments.json"
@@ -418,11 +348,8 @@ def main():
         write_comments("very_negative_comments.json", very_negative)
         write_comments("negative_comments.json", negative)
         write_comments("neutral_comments.json", neutral)
-        write_comments("positive_comments.json", positive['all'])
-
-        for lang in target_langs:
-            lang_name = lang_names.get(lang, lang.upper())
-            write_comments(f"positive_{lang_name.lower()}_comments.json", positive_target_langs[lang])
+        write_comments("positive_comments.json", positive)
+        write_comments(f"positive_{lang_name.lower()}_comments.json", positive_target_lang)
 
         # Write usernames to txt files
         def write_usernames(filename, comments):
@@ -431,10 +358,8 @@ def main():
                 for username in usernames:
                     outfile.write(f"{username}\n")
 
-        write_usernames("positive_usernames.txt", positive['all'])
-        for lang in target_langs:
-            lang_name = lang_names.get(lang, lang.upper())
-            write_usernames(f"positive_{lang_name.lower()}_usernames.txt", positive_target_langs[lang])
+        write_usernames("positive_usernames.txt", positive)
+        write_usernames(f"positive_{lang_name.lower()}_usernames.txt", positive_target_lang)
 
         print(f"Total unique users: {total_unique_users}")
         print(f"Users who commented on multiple influencers' posts: {multi_influencer_users}")
@@ -442,10 +367,8 @@ def main():
         print(f"Very negative comments: {len(very_negative)}")
         print(f"Negative comments: {len(negative)}")
         print(f"Neutral comments: {len(neutral)}")
-        print(f"Positive comments: {len(positive['all'])}")
-        for lang in target_langs:
-            lang_name = lang_names.get(lang, lang.upper())
-            print(f"Positive {lang_name} comments: {len(positive_target_langs[lang])}")
+        print(f"Positive comments: {len(positive)}")
+        print(f"Positive {lang_name} comments: {len(positive_target_lang)}")
 
     except Exception as e:
         print(f"An error occurred: {e}")
